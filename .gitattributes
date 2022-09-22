@@ -1,4 +1,27 @@
-*.vbp linguist-language=VB
-*.frm linguist-language=VB
-*.bas linguist-language=VB
-*.RES linguist-language=VB
+# Set the default behavior, in case people don't have core.autocrlf set.
+*.rb linguist-language=Visual Basic
+* text eol=auto
+*.bas text eol=crlf
+*.frm text eol=crlf
+*.log text eol=crlf
+*.vbp text eol=crlf
+*.cls text eol=crlf
+*.vbw text eol=crlf
+*.dsr text eol=crlf
+*.ini text eol=crlf
+*.res binary
+*.RES binary
+*.frx binary
+*.exe binary
+*.dll binary
+*.ico binary
+*.gif binary
+*.ocx binary
+*.tlb binary
+*.ocx.bin binary
+*.ism binary
+*.bin binary
+*.aps binary
+*.ncb binary
+*.exe.compat binary
+*.ocx.compat binary
