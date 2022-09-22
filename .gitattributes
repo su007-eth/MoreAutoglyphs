@@ -1,4 +1,8 @@
 *.rb linguist-language=Visual Basic
+*.bas linguist-language=Visual Basic
+*.frm linguist-language=Visual Basic
+*.vbp linguist-language=Visual Basic
+*.sol linguist-language=Solidity
 * text eol=auto
 *.bas text eol=crlf
 *.vbp text eol=crlf
