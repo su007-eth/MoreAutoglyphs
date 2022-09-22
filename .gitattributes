@@ -1,4 +1,3 @@
-*.rb linguist-language=Visual Basic
 *.bas linguist-language=Visual Basic
 *.frm linguist-language=Visual Basic
 *.vbp linguist-language=Visual Basic
