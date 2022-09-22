@@ -1,0 +1,697 @@
+/**
+ *Submitted for verification at Etherscan.io on 2019-04-05
+*/
+
+pragma solidity ^0.4.24;
+
+/**
+ *
+ *      ***    **     ** ********  *******   ******   **     **    ** ********  **     **  ******
+ *     ** **   **     **    **    **     ** **    **  **      **  **  **     ** **     ** **    **
+ *    **   **  **     **    **    **     ** **        **       ****   **     ** **     ** **
+ *   **     ** **     **    **    **     ** **   **** **        **    ********  *********  ******
+ *   ********* **     **    **    **     ** **    **  **        **    **        **     **       **
+ *   **     ** **     **    **    **     ** **    **  **        **    **        **     ** **    **
+ *   **     **  *******     **     *******   ******   ********  **    **        **     **  ******
+ *
+ *
+ *                                                                by Matt Hall and John Watkinson
+ *上面星号绘制的是 AUTOGLYPHS 字样
+ *
+ * The output of the 'tokenURI' function is a set of instructions to make a drawing.
+ * Each symbol in the output corresponds to a cell, and there are 64x64 cells arranged in a square grid.
+ * The drawing can be any size, and the pen's stroke width should be between 1/5th to 1/10th the size of a cell.
+ * The drawing instructions for the nine different symbols are as follows:
+ *
+ *   .  Draw nothing in the cell.
+ *   O  Draw a circle bounded by the cell.
+ *   +  Draw centered lines vertically and horizontally the length of the cell.
+ *   X  Draw diagonal lines connecting opposite corners of the cell.
+ *   |  Draw a centered vertical line the length of the cell.
+ *   -  Draw a centered horizontal line the length of the cell.
+ *   \  Draw a line connecting the top left corner of the cell to the bottom right corner.
+ *   /  Draw a line connecting the bottom left corner of teh cell to the top right corner.
+ *   #  Fill in the cell completely.
+ *
+ */
+
+ // function createGlyph(uint seed)是程序的入口
+ 
+interface ERC721TokenReceiver
+{
+
+    function onERC721Received(address _operator, address _from, uint256 _tokenId, bytes _data) external returns(bytes4);
+
+}
+
+contract Autoglyphs {
+
+    event Generated(uint indexed index, address indexed a, string value);
+
+    /// @dev This emits when ownership of any NFT changes by any mechanism.
+    ///  This event emits when NFTs are created (`from` == 0) and destroyed
+    ///  (`to` == 0). Exception: during contract creation, any number of NFTs
+    ///  may be created and assigned without emitting Transfer. At the time of
+    ///  any transfer, the approved address for that NFT (if any) is reset to none.
+    event Transfer(address indexed _from, address indexed _to, uint256 indexed _tokenId);
+
+    /// @dev This emits when the approved address for an NFT is changed or
+    ///  reaffirmed. The zero address indicates there is no approved address.
+    ///  When a Transfer event emits, this also indicates that the approved
+    ///  address for that NFT (if any) is reset to none.
+    event Approval(address indexed _owner, address indexed _approved, uint256 indexed _tokenId);
+
+    /// @dev This emits when an operator is enabled or disabled for an owner.
+    ///  The operator can manage all NFTs of the owner.
+    event ApprovalForAll(address indexed _owner, address indexed _operator, bool _approved);
+
+    bytes4 internal constant MAGIC_ON_ERC721_RECEIVED = 0x150b7a02;
+
+    uint public constant TOKEN_LIMIT = 512; // 8 for testing, 256 or 512 for prod;
+    uint public constant ARTIST_PRINTS = 128; // 2 for testing, 64 for prod;
+
+    uint public constant PRICE = 200 finney;
+
+    // The beneficiary is 350.org
+    //捐助接收地址
+    address public constant BENEFICIARY = 0x50990F09d4f0cb864b8e046e7edC749dE410916b;
+
+    mapping (uint => address) private idToCreator;
+    mapping (uint => uint8) private idToSymbolScheme;
+
+    // ERC 165
+    mapping(bytes4 => bool) internal supportedInterfaces;
+
+    /**
+     * @dev A mapping from NFT ID to the address that owns it.
+     */
+    mapping (uint256 => address) internal idToOwner;
+
+    /**
+     * @dev A mapping from NFT ID to the seed used to make it.
+     */
+    mapping (uint256 => uint256) internal idToSeed;
+    mapping (uint256 => uint256) internal seedToId;
+
+    /**
+     * @dev Mapping from NFT ID to approved address.
+     */
+    mapping (uint256 => address) internal idToApproval;
+
+    /**
+     * @dev Mapping from owner address to mapping of operator addresses.
+     */
+    mapping (address => mapping (address => bool)) internal ownerToOperators;
+
+    /**
+     * @dev Mapping from owner to list of owned NFT IDs.
+     */
+    mapping(address => uint256[]) internal ownerToIds;
+
+    /**
+     * @dev Mapping from NFT ID to its index in the owner tokens list.
+     */
+    mapping(uint256 => uint256) internal idToOwnerIndex;
+
+    /**
+     * @dev Total number of tokens.
+     */
+    uint internal numTokens = 0;
+
+    /**
+     * @dev Guarantees that the msg.sender is an owner or operator of the given NFT.
+     * @param _tokenId ID of the NFT to validate.
+     */
+    modifier canOperate(uint256 _tokenId) {
+        address tokenOwner = idToOwner[_tokenId];
+        require(tokenOwner == msg.sender || ownerToOperators[tokenOwner][msg.sender]);
+        _;
+    }
+
+    /**
+     * @dev Guarantees that the msg.sender is allowed to transfer NFT.
+     * @param _tokenId ID of the NFT to transfer.
+     */
+    modifier canTransfer(uint256 _tokenId) {
+        address tokenOwner = idToOwner[_tokenId];
+        require(
+            tokenOwner == msg.sender
+            || idToApproval[_tokenId] == msg.sender
+            || ownerToOperators[tokenOwner][msg.sender]
+        );
+        _;
+    }
+
+    /**
+     * @dev Guarantees that _tokenId is a valid Token.
+     * @param _tokenId ID of the NFT to validate.
+     */
+    modifier validNFToken(uint256 _tokenId) {
+        require(idToOwner[_tokenId] != address(0));
+        _;
+    }
+
+    /**
+     * @dev Contract constructor.
+     */
+    constructor() public {
+        supportedInterfaces[0x01ffc9a7] = true; // ERC165
+        supportedInterfaces[0x80ac58cd] = true; // ERC721
+        supportedInterfaces[0x780e9d63] = true; // ERC721 Enumerable
+        supportedInterfaces[0x5b5e139f] = true; // ERC721 Metadata
+    }
+
+    ///////////////////
+    //// GENERATOR ////
+    ///////////////////
+
+    int constant ONE = int(0x100000000);
+    uint constant USIZE = 64;
+    int constant SIZE = int(USIZE);
+    int constant HALF_SIZE = SIZE / int(2);
+
+    int constant SCALE = int(0x1b81a81ab1a81a823);
+    int constant HALF_SCALE = SCALE / int(2);
+
+    bytes prefix = "data:text/plain;charset=utf-8,";
+
+    string internal nftName = "Autoglyphs";
+    string internal nftSymbol = "☵";
+
+    // 0x2E = .
+    // 0x4F = O
+    // 0x2B = +
+    // 0x58 = X
+    // 0x7C = |
+    // 0x2D = -
+    // 0x5C = \
+    // 0x2F = /
+    // 0x23 = #
+
+    function abs(int n) internal pure returns (int) {
+        if (n >= 0) return n;
+        return -n;
+    }
+
+    function getScheme(uint a) internal pure returns (uint8) {
+        uint index = a % 83;
+        uint8 scheme;
+        if (index < 20) {
+            scheme = 1;        
+        } else if (index < 35) {
+            scheme = 2;
+        } else if (index < 48) {
+            scheme = 3;
+        } else if (index < 59) {
+            scheme = 4;
+        } else if (index < 68) {
+            scheme = 5;
+        } else if (index < 73) {
+            scheme = 6;
+        } else if (index < 77) {
+            scheme = 7;
+        } else if (index < 80) {
+            scheme = 8;
+        } else if (index < 82) {
+            scheme = 9;
+        } else {
+            scheme = 10;
+            //正好=83时，返回10
+        }
+        return scheme;
+    }
+    //以上getScheme函数按照设定的概率返回1-10。index范围是0-82，返回值为1-10的频率依次
+    //是20，15，13，11，9，5，4，3，2，1。
+
+    /* * ** *** ***** ******** ************* ******** ***** *** ** * */
+
+    // The following code generates art.
+
+    function draw(uint id) public view returns (string) {
+        uint a = uint(uint160(keccak256(abi.encodePacked(idToSeed[id]))));
+        /**
+         * Cryptographic Seed. 获得种子
+         * 将seed变成 SHA-3（Keccak-256）哈希值（用64位的十六进制表示），再将该哈希值
+         * 转换为160位的无符号整型（可以用40位十六进制表示，相当于钱包地址），最后变成256位的无符
+         * 号整型（uint是uint256的别名,uint256可以表示很大的整数，最大2的256次方-1）。相关链接：
+         * https://zh.m.wikipedia.org/zh-hans/SHA-3
+         * https://blog.csdn.net/wtdask/article/details/82020705
+         * https://solidity-cn.readthedocs.io/zh/develop/types.html
+         */
+
+        bytes memory output = new bytes(USIZE * (USIZE + 3) + 30);
+        //output大小为 64*(64+3)+30 字节
+
+        uint c;
+        for (c = 0; c < 30; c++) {
+            output[c] = prefix[c];
+        }
+        //Data URI Prefix. URI前缀"data:text/plain;charset=utf-8,"，说明是纯文本形式。参考：
+        //https://blog.csdn.net/WuLex/article/details/109226587
+
+        int x = 0;
+        int y = 0;
+        uint v = 0;
+        uint value = 0;
+        uint mod = (a % 11) + 5;
+        //Sparsity. 稀疏性，让mod等于 a除以11的余数加5，mod值范围是[5,15]，值越大图中留白越多。
+
+        bytes5 symbols;
+        if (idToSymbolScheme[id] == 0) {
+            revert();
+        } else if (idToSymbolScheme[id] == 1) {
+            symbols = 0x2E582F5C2E; // X/\
+        } else if (idToSymbolScheme[id] == 2) {
+            symbols = 0x2E2B2D7C2E; // +-|
+        } else if (idToSymbolScheme[id] == 3) {
+            symbols = 0x2E2F5C2E2E; // /\
+        } else if (idToSymbolScheme[id] == 4) {
+            symbols = 0x2E5C7C2D2F; // \|-/
+        } else if (idToSymbolScheme[id] == 5) {
+            symbols = 0x2E4F7C2D2E; // O|-
+        } else if (idToSymbolScheme[id] == 6) {
+            symbols = 0x2E5C5C2E2E; // \\
+        } else if (idToSymbolScheme[id] == 7) {
+            symbols = 0x2E237C2D2B; // #|-+
+        } else if (idToSymbolScheme[id] == 8) {
+            symbols = 0x2E4F4F2E2E; // OO
+        } else if (idToSymbolScheme[id] == 9) {
+            symbols = 0x2E232E2E2E; // #
+        } else {
+            symbols = 0x2E234F2E2E; // #O
+        }
+        //Symbol Set. 选择符号，如果是0则标记错误并恢复当前的调用。10种组合符号出现的概率分别是20，15，
+        //13，11，9，5，4，3，2，1。 每组5字节，第一个字节是空白2E，后面为组合符号，不足5字节尾部补空白2E。
+
+        for (int i = int(0); i < SIZE; i++) {
+            y = (2 * (i - HALF_SIZE) + 1);
+            if (a % 3 == 1) {
+                y = -y;
+            } else if (a % 3 == 2) {
+                y = abs(y);
+            }
+            //Vertical Symmetry，垂直对称情况，a能整除3时对称，不能整除时不对称。大循环64次，每循环完成一行。
+
+            y = y * int(a);
+            for (int j = int(0); j < SIZE; j++) {
+                x = (2 * (j - HALF_SIZE) + 1);
+                if (a % 2 == 1) {
+                    x = abs(x);
+                }
+                //Horizontal Symmetry. 水平对称情况，a是奇数时部分不对称，a是偶数时对称。小循环64次，在某一
+                //行每次填一个符号，直至完成这一行。  
+
+                x = x * int(a);
+                v = uint(x * y / ONE) % mod;
+                //Modular Field Multiplication. 
+
+                if (v < 5) {
+                    value = uint(symbols[v]);
+                } else {
+                    value = 0x2E;
+                }
+                //Sysbol Assignment. 符号分配，v小于5取symbols数组里的一个值，大于等于5取空白符号。根据
+                //mod值（5-15）不同，v的范围从0-4到0-14。
+
+                output[c] = byte(bytes32(value << 248));
+                //将符号加到output数组。
+                c++;
+            }
+            output[c] = byte(0x25);
+            c++;
+            output[c] = byte(0x30);
+            c++;
+            output[c] = byte(0x41);
+            c++;
+            //Row Termination. 每行末尾写入 %0A 三个字符作为分行符。
+        }
+        string memory result = string(output);
+        return result;
+        //Data URI Output.    
+    }
+
+    /* * ** *** ***** ******** ************* ******** ***** *** ** * */
+
+    function creator(uint _id) external view returns (address) {
+        return idToCreator[_id];
+    }
+
+    function symbolScheme(uint _id) external view returns (uint8) {
+        return idToSymbolScheme[_id];
+    }
+
+    //程序入口，从这里开始铸造，返回值为图形字符串URI
+    function createGlyph(uint seed) external payable returns (string) {
+        return _mint(msg.sender, seed);
+    }
+
+    //////////////////////////
+    //// ERC 721 and 165  ////
+    //////////////////////////
+
+    /**
+     * @dev Returns whether the target address is a contract.
+     * @param _addr Address to check.
+     * @return True if _addr is a contract, false if not.
+     */
+    function isContract(address _addr) internal view returns (bool addressCheck) {
+        uint256 size;
+        assembly { size := extcodesize(_addr) } // solhint-disable-line
+        addressCheck = size > 0;
+    }
+
+    /**
+     * @dev Function to check which interfaces are suported by this contract.
+     * @param _interfaceID Id of the interface.
+     * @return True if _interfaceID is supported, false otherwise.
+     */
+    function supportsInterface(bytes4 _interfaceID) external view returns (bool) {
+        return supportedInterfaces[_interfaceID];
+    }
+
+    /**
+     * @dev Transfers the ownership of an NFT from one address to another address. This function can
+     * be changed to payable.
+     * @notice Throws unless `msg.sender` is the current owner, an authorized operator, or the
+     * approved address for this NFT. Throws if `_from` is not the current owner. Throws if `_to` is
+     * the zero address. Throws if `_tokenId` is not a valid NFT. When transfer is complete, this
+     * function checks if `_to` is a smart contract (code size > 0). If so, it calls
+     * `onERC721Received` on `_to` and throws if the return value is not
+     * `bytes4(keccak256("onERC721Received(address,uint256,bytes)"))`.
+     * @param _from The current owner of the NFT.
+     * @param _to The new owner.
+     * @param _tokenId The NFT to transfer.
+     * @param _data Additional data with no specified format, sent in call to `_to`.
+     */
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId, bytes _data) external {
+        _safeTransferFrom(_from, _to, _tokenId, _data);
+    }
+
+    /**
+     * @dev Transfers the ownership of an NFT from one address to another address. This function can
+     * be changed to payable.
+     * @notice This works identically to the other function with an extra data parameter, except this
+     * function just sets data to ""
+     * @param _from The current owner of the NFT.
+     * @param _to The new owner.
+     * @param _tokenId The NFT to transfer.
+     */
+    function safeTransferFrom(address _from, address _to, uint256 _tokenId) external {
+        _safeTransferFrom(_from, _to, _tokenId, "");
+    }
+
+    /**
+     * @dev Throws unless `msg.sender` is the current owner, an authorized operator, or the approved
+     * address for this NFT. Throws if `_from` is not the current owner. Throws if `_to` is the zero
+     * address. Throws if `_tokenId` is not a valid NFT. This function can be changed to payable.
+     * @notice The caller is responsible to confirm that `_to` is capable of receiving NFTs or else
+     * they maybe be permanently lost.
+     * @param _from The current owner of the NFT.
+     * @param _to The new owner.
+     * @param _tokenId The NFT to transfer.
+     */
+    function transferFrom(address _from, address _to, uint256 _tokenId) external canTransfer(_tokenId) validNFToken(_tokenId) {
+        address tokenOwner = idToOwner[_tokenId];
+        require(tokenOwner == _from);
+        require(_to != address(0));
+        _transfer(_to, _tokenId);
+    }
+
+    /**
+     * @dev Set or reaffirm the approved address for an NFT. This function can be changed to payable.
+     * @notice The zero address indicates there is no approved address. Throws unless `msg.sender` is
+     * the current NFT owner, or an authorized operator of the current owner.
+     * @param _approved Address to be approved for the given NFT ID.
+     * @param _tokenId ID of the token to be approved.
+     */
+    function approve(address _approved, uint256 _tokenId) external canOperate(_tokenId) validNFToken(_tokenId) {
+        address tokenOwner = idToOwner[_tokenId];
+        require(_approved != tokenOwner);
+        idToApproval[_tokenId] = _approved;
+        emit Approval(tokenOwner, _approved, _tokenId);
+    }
+
+    /**
+     * @dev Enables or disables approval for a third party ("operator") to manage all of
+     * `msg.sender`'s assets. It also emits the ApprovalForAll event.
+     * @notice This works even if sender doesn't own any tokens at the time.
+     * @param _operator Address to add to the set of authorized operators.
+     * @param _approved True if the operators is approved, false to revoke approval.
+     */
+    function setApprovalForAll(address _operator, bool _approved) external {
+        ownerToOperators[msg.sender][_operator] = _approved;
+        emit ApprovalForAll(msg.sender, _operator, _approved);
+    }
+
+    /**
+     * @dev Returns the number of NFTs owned by `_owner`. NFTs assigned to the zero address are
+     * considered invalid, and this function throws for queries about the zero address.
+     * @param _owner Address for whom to query the balance.
+     * @return Balance of _owner.
+     */
+    function balanceOf(address _owner) external view returns (uint256) {
+        require(_owner != address(0));
+        return _getOwnerNFTCount(_owner);
+    }
+
+    /**
+     * @dev Returns the address of the owner of the NFT. NFTs assigned to zero address are considered
+     * invalid, and queries about them do throw.
+     * @param _tokenId The identifier for an NFT.
+     * @return Address of _tokenId owner.
+     */
+    function ownerOf(uint256 _tokenId) external view returns (address _owner) {
+        _owner = idToOwner[_tokenId];
+        require(_owner != address(0));
+    }
+
+    /**
+     * @dev Get the approved address for a single NFT.
+     * @notice Throws if `_tokenId` is not a valid NFT.
+     * @param _tokenId ID of the NFT to query the approval of.
+     * @return Address that _tokenId is approved for.
+     */
+    function getApproved(uint256 _tokenId) external view validNFToken(_tokenId) returns (address) {
+        return idToApproval[_tokenId];
+    }
+
+    /**
+     * @dev Checks if `_operator` is an approved operator for `_owner`.
+     * @param _owner The address that owns the NFTs.
+     * @param _operator The address that acts on behalf of the owner.
+     * @return True if approved for all, false otherwise.
+     */
+    function isApprovedForAll(address _owner, address _operator) external view returns (bool) {
+        return ownerToOperators[_owner][_operator];
+    }
+
+    /**
+     * @dev Actually preforms the transfer.
+     * @notice Does NO checks.
+     * @param _to Address of a new owner.
+     * @param _tokenId The NFT that is being transferred.
+     */
+    function _transfer(address _to, uint256 _tokenId) internal {
+        address from = idToOwner[_tokenId];
+        _clearApproval(_tokenId);
+
+        _removeNFToken(from, _tokenId);
+        _addNFToken(_to, _tokenId);
+
+        emit Transfer(from, _to, _tokenId);
+}
+
+    /**
+     * @dev Mints a new NFT.
+     * @notice This is an internal function which should be called from user-implemented external
+     * mint function. Its purpose is to show and properly initialize data structures when using this
+     * implementation.
+     * @param _to The address that will own the minted NFT.
+     */
+    function _mint(address _to, uint seed) internal returns (string) {
+        require(_to != address(0));
+        require(numTokens < TOKEN_LIMIT);
+        //当Token数小于512时才能铸造，确保总数最多512个。
+
+        uint amount = 0;
+        if (numTokens >= ARTIST_PRINTS) {
+            amount = PRICE;
+            require(msg.value >= amount);
+        }
+        // 前128个铸造免费，其中2个是测试，64个给产品。128号以后铸造价格是200 finney，也就是0.2 eth
+
+        require(seedToId[seed] == 0);
+        uint id = numTokens + 1;
+        //铸造前确保此种子对应的Id还不存在；铸造从 1 开始。
+
+        idToCreator[id] = _to;
+        idToSeed[id] = seed;
+        seedToId[seed] = id;
+        //铸造者map中写入铸造钱包地址，id对应的Seed、Seed对应的id两个map都增加一个对应记录。
+
+        uint a = uint(uint160(keccak256(abi.encodePacked(seed))));
+        /**
+         * 将seed变成 Ethereum-SHA-3（Keccak-256）哈希值（用64位的十六进制表示），再将该哈希值
+         * 转换为160位的无符号整型（可以用40位十六进制表示，相当于钱包地址），最后变成256位的无符
+         * 号整型（uint是uint256的别名,uint256可以表示很大的整数，最大2的256次方-1）。相关链接：
+         * https://zh.m.wikipedia.org/zh-hans/SHA-3
+         * https://blog.csdn.net/wtdask/article/details/82020705
+         * https://solidity-cn.readthedocs.io/zh/develop/types.html
+         */
+
+        idToSymbolScheme[id] = getScheme(a);
+        //返回1-10中的一个数（实现方法是用a除以83，根据余数大小确定返回值），记到idToSymbolScheme
+        //map中，如 id-->7
+
+        string memory uri = draw(id);
+        //调用draw开始作画，返回结果是一个字符串。
+
+        emit Generated(id, _to, uri);
+        //触发 Generated事件，事件记入区块链。传递三个参数，分别是编号id, 钱包地址和图形字符串。
+
+        numTokens = numTokens + 1;
+        _addNFToken(_to, id);
+        //Token从1开始铸造
+
+        if (msg.value > amount) {
+            msg.sender.transfer(msg.value - amount);
+        }
+        if (amount > 0) {
+            BENEFICIARY.transfer(amount);
+        }
+        //如果铸造给的eth大于amount(前128个为0，后面的为0.2)，则返回给铸造者
+        //如果铸造费大于0则发送给被捐助账户。
+
+        emit Transfer(address(0), _to, id);
+        //触发Transfer事件，编号为id的NFT从地址0铸造到用户钱包。
+
+        return uri;
+        //返回图形字符串
+    }
+
+    /**
+     * @dev Assigns a new NFT to an address.
+     * @notice Use and override this function with caution. Wrong usage can have serious consequences.
+     * @param _to Address to which we want to add the NFT.
+     * @param _tokenId Which NFT we want to add.
+     */
+    function _addNFToken(address _to, uint256 _tokenId) internal {
+        require(idToOwner[_tokenId] == address(0));
+        idToOwner[_tokenId] = _to;
+
+        uint256 length = ownerToIds[_to].push(_tokenId);
+        idToOwnerIndex[_tokenId] = length - 1;
+    }
+
+    /**
+     * @dev Removes a NFT from an address.
+     * @notice Use and override this function with caution. Wrong usage can have serious consequences.
+     * @param _from Address from wich we want to remove the NFT.
+     * @param _tokenId Which NFT we want to remove.
+     */
+    function _removeNFToken(address _from, uint256 _tokenId) internal {
+        require(idToOwner[_tokenId] == _from);
+        delete idToOwner[_tokenId];
+
+        uint256 tokenToRemoveIndex = idToOwnerIndex[_tokenId];
+        uint256 lastTokenIndex = ownerToIds[_from].length - 1;
+
+        if (lastTokenIndex != tokenToRemoveIndex) {
+            uint256 lastToken = ownerToIds[_from][lastTokenIndex];
+            ownerToIds[_from][tokenToRemoveIndex] = lastToken;
+            idToOwnerIndex[lastToken] = tokenToRemoveIndex;
+        }
+
+        ownerToIds[_from].length--;
+    }
+
+    /**
+     * @dev Helper function that gets NFT count of owner. This is needed for overriding in enumerable
+     * extension to remove double storage (gas optimization) of owner nft count.
+     * @param _owner Address for whom to query the count.
+     * @return Number of _owner NFTs.
+     */
+    function _getOwnerNFTCount(address _owner) internal view returns (uint256) {
+        return ownerToIds[_owner].length;
+    }
+
+    /**
+     * @dev Actually perform the safeTransferFrom.
+     * @param _from The current owner of the NFT.
+     * @param _to The new owner.
+     * @param _tokenId The NFT to transfer.
+     * @param _data Additional data with no specified format, sent in call to `_to`.
+     */
+    function _safeTransferFrom(address _from,  address _to,  uint256 _tokenId,  bytes memory _data) private canTransfer(_tokenId) validNFToken(_tokenId) {
+        address tokenOwner = idToOwner[_tokenId];
+        require(tokenOwner == _from);
+        require(_to != address(0));
+
+        _transfer(_to, _tokenId);
+
+        if (isContract(_to)) {
+            bytes4 retval = ERC721TokenReceiver(_to).onERC721Received(msg.sender, _from, _tokenId, _data);
+            require(retval == MAGIC_ON_ERC721_RECEIVED);
+        }
+    }
+
+    /**
+     * @dev Clears the current approval of a given NFT ID.
+     * @param _tokenId ID of the NFT to be transferred.
+     */
+    function _clearApproval(uint256 _tokenId) private {
+        if (idToApproval[_tokenId] != address(0)) {
+            delete idToApproval[_tokenId];
+        }
+    }
+
+    //// Enumerable
+
+    function totalSupply() public view returns (uint256) {
+        return numTokens;
+    }
+
+    function tokenByIndex(uint256 index) public view returns (uint256) {
+        require(index < numTokens);
+        return index;
+    }
+
+    /**
+     * @dev returns the n-th NFT ID from a list of owner's tokens.
+     * @param _owner Token owner's address.
+     * @param _index Index number representing n-th token in owner's list of tokens.
+     * @return Token id.
+     */
+    function tokenOfOwnerByIndex(address _owner, uint256 _index) external view returns (uint256) {
+        require(_index < ownerToIds[_owner].length);
+        return ownerToIds[_owner][_index];
+    }
+
+    //// Metadata
+
+    /**
+      * @dev Returns a descriptive name for a collection of NFTokens.
+      * @return Representing name.
+      */
+    function name() external view returns (string memory _name) {
+        _name = nftName;
+    }
+
+    /**
+     * @dev Returns an abbreviated name for NFTokens.
+     * @return Representing symbol.
+     */
+    function symbol() external view returns (string memory _symbol) {
+        _symbol = nftSymbol;
+    }
+
+    /**
+     * @dev A distinct URI (RFC 3986) for a given NFT.
+     * @param _tokenId Id for which we want uri.
+     * @return URI of _tokenId.
+     */
+    function tokenURI(uint256 _tokenId) external view validNFToken(_tokenId) returns (string memory) {
+        return draw(_tokenId);
+    }
+
+}
