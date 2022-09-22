@@ -13,6 +13,7 @@ WARNING
 This software refers to the algorithm of Larva Labs, please do not use it for 
 commercial purposes, otherwise you will be responsible for the consequences.
 ```
+https://user-images.githubusercontent.com/5119404/191665756-7a59a03b-e948-499c-98f4-bbe7ed91509e.mp4
 <img src="/src/cover.png" width=860>
 <img src="/bin/example/example/a1.png" width=1024>
 <img src="/bin/example/example/a2.png" width=860>
@@ -22,6 +23,3 @@ commercial purposes, otherwise you will be responsible for the consequences.
 <img src="/bin/example/example/a6.png" width=860>
 <img src="/bin/example/example/a8.png" width=860>
 <img src="/bin/example/example/a9.png" width=860>
-src/Demo.mp4
-<iframe height=640 width=510 src="/src/demo.mp4">
-<video src="/src/demo.mp4"></video>
