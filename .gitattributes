@@ -1,6 +1,6 @@
-*.bas linguist-language=Visual Basic
-*.frm linguist-language=Visual Basic
-*.vbp linguist-language=Visual Basic
+*.bas linguist-language=vb6
+*.frm linguist-language=vb6
+*.vbp linguist-language=vb6
 *.sol linguist-language=Solidity
 * text eol=auto
 *.bas text eol=crlf
