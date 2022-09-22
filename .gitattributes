@@ -1,6 +1,7 @@
 *.vbp linguist-language=Visual Basic
 * text eol=auto
 *.bas text eol=crlf
+*.vbp text eol=crlf
 *.frm text eol=crlf
 *.log text eol=crlf
 *.cls text eol=crlf
