@@ -1,4 +1,4 @@
-*.vbp linguist-language=Visual Basic
+*.rb linguist-language=Visual Basic
 * text eol=auto
 *.bas text eol=crlf
 *.vbp text eol=crlf
