@@ -1,0 +1,4 @@
+*.vbp linguist-language=VB
+*.frm linguist-language=VB
+*.bas linguist-language=VB
+*.RES linguist-language=VB
